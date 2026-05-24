@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<title>Silent Woods — не кричи</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: #000; color: #c8c8c8;
+    font-family: "Courier New", monospace; overflow: hidden; user-select: none;
+  }
+  #stage { position: relative; width: 100vw; height: 100vh; }
+  canvas { display: block; width: 100%; height: 100%; background: #050505; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(0,0,0,0.85); padding: 20px;
+  }
+  .overlay h1 { font-size: 42px; letter-spacing: 4px; color: #b00; text-shadow: 0 0 10px #500; margin: 0 0 12px; }
+  .overlay p { max-width: 540px; line-height: 1.5; color: #aaa; }
+  .overlay button {
+    margin-top: 24px; padding: 12px 28px; background: #111; color: #d33;
+    border: 1px solid #500; font-family: inherit; font-size: 18px;
+    letter-spacing: 2px; cursor: pointer;
+  }
+  .overlay button:hover { background: #1a0000; color: #f44; }
+  .hud {
+    position: absolute; top: 12px; left: 12px; right: 12px;
+    display: flex; justify-content: space-between; pointer-events: none;
+    font-size: 14px; color: #888; text-shadow: 0 0 4px #000;
+  }
+  .timer { font-size: 28px; color: #ccc; letter-spacing: 3px; }
+  .danger { color: #f55 !important; animation: shake 0.15s infinite; }
+  .meter {
+    width: 200px; height: 10px; background: #222; border: 1px solid #444;
+    margin-top: 6px; overflow: hidden;
+  }
+  .meter > div { height: 100%; background: linear-gradient(90deg,#262,#a40); width: 0%; transition: width 0.05s linear; }
+  .vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    box-shadow: inset 0 0 200px 80px #000;
+  }
+  .jump {
+    position: absolute; inset: 0; display: none;
+    background: #000; align-items: center; justify-content: center;
+  }
+  .jump.show { display: flex; animation: flash 0.08s 3; }
+  @keyframes flash { 50% { background: #f00; } }
+  @keyframes shake {
+    0% { transform: translate(0,0); } 25% { transform: translate(-2px,1px); }
+    50% { transform: translate(2px,-1px); } 75% { transform: translate(-1px,-2px); }
+  }
+  .static {
+    position: absolute; inset: 0; pointer-events: none;
+    background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 3px 3px; opacity: 0.4; mix-blend-mode: screen;
+  }
+  #subtitle {
+    position: absolute; bottom: 40px; left: 0; right: 0; text-align: center;
+    color: #888; font-style: italic; font-size: 16px; pointer-events: none;
+    text-shadow: 0 0 4px #000;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="scene"></canvas>
+  <div class="vignette"></div>
+  <div class="static"></div>
+
+  <div class="hud">
+    <div>
+      <div>микрофон</div>
+      <div class="meter"><div id="micBar"></div></div>
+      <div id="micState" style="margin-top:4px;">ожидание...</div>
+    </div>
+    <div style="text-align:right;">
+      <div>выживание</div>
+      <div class="timer" id="timer">15:00</div>
+      <div id="threat" style="margin-top:4px;">тишина...</div>
+    </div>
+  </div>
+
+  <div id="subtitle"></div>
+
+  <div class="jump" id="jump">
+    <canvas id="face" width="600" height="600"></canvas>
+  </div>
+
+  <div class="overlay" id="menu">
+    <h1>SILENT WOODS</h1>
+    <p>
+      Ты заблудился в лесу. Что-то идёт по твоему следу.
+      Оно не видит — оно слышит.<br><br>
+      Продержись 15 минут в тишине. Каждый громкий звук в твоём микрофоне
+      приближает его. Любое слово, крик, кашель — оно услышит.<br><br>
+      <b style="color:#b00;">НЕ КРИЧИ.</b>
+    </p>
+    <button id="startBtn">начать (даст доступ к микрофону)</button>
+    <p style="font-size:12px;color:#555;margin-top:18px;">наушники обязательны · играть в темноте</p>
+  </div>
+
+  <div class="overlay" id="loseScreen" style="display:none;">
+    <h1 style="color:#600;">ОНО НАШЛО ТЕБЯ</h1>
+    <p id="loseReason">ты был слишком громким.</p>
+    <button onclick="location.reload()">снова</button>
+  </div>
+
+  <div class="overlay" id="winScreen" style="display:none;">
+    <h1 style="color:#080;">РАССВЕТ</h1>
+    <p>солнце поднялось. оно ушло обратно в землю.<br>пока что.</p>
+    <button onclick="location.reload()">ещё раз</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const micBar = document.getElementById('micBar');
+  const micState = document.getElementById('micState');
+  const timerEl = document.getElementById('timer');
+  const threatEl = document.getElementById('threat');
+  const subtitleEl = document.getElementById('subtitle');
+  const jumpEl = document.getElementById('jump');
+  const faceCanvas = document.getElementById('face');
+  const faceCtx = faceCanvas.getContext('2d');
+  const menu = document.getElementById('menu');
+  const loseScreen = document.getElementById('loseScreen');
+  const winScreen = document.getElementById('winScreen');
+  const loseReason = document.getElementById('loseReason');
+  const startBtn = document.getElementById('startBtn');
+
+  let W = 0, H = 0;
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---- procedural forest ----
+  const trees = [];
+  function regenTrees() {
+    trees.length = 0;
+    for (let i = 0; i < 80; i++) {
+      trees.push({
+        x: Math.random(),
+        z: 0.1 + Math.random() * 0.9,
+        bend: (Math.random() - 0.5) * 0.3,
+        seed: Math.random() * 1000,
+      });
+    }
+  }
+  regenTrees();
+
+  let camSway = 0;
+  let camX = 0;
+  let fogIntensity = 0.7;
+  let presenceDistance = 1.0; // 1.0 far, 0.0 right next to you
+
+  function drawForest(t) {
+    // sky
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#020308');
+    g.addColorStop(0.6, '#0a0a12');
+    g.addColorStop(1, '#000');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // moon
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    const mx = W * 0.78, my = H * 0.22;
+    const rad = ctx.createRadialGradient(mx, my, 0, mx, my, 90);
+    rad.addColorStop(0, '#e0e0d8');
+    rad.addColorStop(0.4, '#666');
+    rad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = rad;
+    ctx.fillRect(mx - 100, my - 100, 200, 200);
+    ctx.restore();
+
+    // ground
+    ctx.fillStyle = '#060604';
+    ctx.fillRect(0, H * 0.62, W, H * 0.38);
+
+    // trees back-to-front
+    const sorted = trees.slice().sort((a, b) => b.z - a.z);
+    for (const tr of sorted) {
+      const dist = tr.z;
+      const size = (1 - dist) * H * 0.9 + 30;
+      const screenX = ((tr.x - camX * dist) % 1 + 1) % 1 * W;
+      const sway = Math.sin(t * 0.0006 + tr.seed) * 4 * (1 - dist);
+      const x = screenX + sway;
+      const baseY = H * 0.62 + (1 - dist) * H * 0.05;
+
+      const fog = Math.min(1, dist * 1.3 * fogIntensity);
+      const c = Math.floor(20 - dist * 15);
+      ctx.fillStyle = `rgba(${c},${c+3},${c+1},${1 - fog})`;
+
+      // trunk
+      ctx.beginPath();
+      ctx.moveTo(x - size * 0.04, baseY);
+      ctx.lineTo(x + size * 0.04, baseY);
+      ctx.lineTo(x + size * 0.02 + tr.bend * size * 0.1, baseY - size);
+      ctx.lineTo(x - size * 0.02 + tr.bend * size * 0.1, baseY - size);
+      ctx.closePath();
+      ctx.fill();
+
+      // canopy (jagged)
+      ctx.beginPath();
+      const cx = x + tr.bend * size * 0.1;
+      const cy = baseY - size;
+      ctx.moveTo(cx - size * 0.3, cy);
+      for (let a = 0; a < 12; a++) {
+        const ang = (a / 12) * Math.PI - Math.PI;
+        const r = size * (0.25 + ((tr.seed * (a + 1)) % 1) * 0.15);
+        ctx.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r * 0.7);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // fog layer
+    ctx.fillStyle = `rgba(8,8,10,${0.3 + 0.4 * fogIntensity})`;
+    ctx.fillRect(0, H * 0.55, W, H * 0.45);
+
+    // presence — silhouette walking up when threat is close
+    if (presenceDistance < 0.85) {
+      const p = 1 - presenceDistance;
+      const figH = H * (0.15 + p * 0.55);
+      const fx = W / 2 + Math.sin(t * 0.001) * 30 * (1 - p);
+      const fy = H * 0.62;
+      ctx.save();
+      ctx.globalAlpha = 0.55 + p * 0.45;
+      ctx.fillStyle = '#000';
+      // body
+      ctx.beginPath();
+      ctx.ellipse(fx, fy - figH * 0.5, figH * 0.18, figH * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // head
+      ctx.beginPath();
+      ctx.arc(fx, fy - figH, figH * 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      // arms long
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = figH * 0.05;
+      ctx.beginPath();
+      ctx.moveTo(fx - figH * 0.1, fy - figH * 0.75);
+      ctx.lineTo(fx - figH * 0.25, fy - figH * 0.15);
+      ctx.moveTo(fx + figH * 0.1, fy - figH * 0.75);
+      ctx.lineTo(fx + figH * 0.25, fy - figH * 0.15);
+      ctx.stroke();
+      // glowing eyes when very close
+      if (p > 0.5) {
+        ctx.fillStyle = `rgba(200,30,30,${(p - 0.5) * 2})`;
+        ctx.beginPath();
+        ctx.arc(fx - figH * 0.04, fy - figH * 1.02, figH * 0.018, 0, Math.PI * 2);
+        ctx.arc(fx + figH * 0.04, fy - figH * 1.02, figH * 0.018, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  // ---- jumpscare face (procedural, not borrowed) ----
+  function drawFace() {
+    const fw = faceCanvas.width, fh = faceCanvas.height;
+    faceCtx.fillStyle = '#000';
+    faceCtx.fillRect(0, 0, fw, fh);
+    // pale skin
+    const cx = fw / 2, cy = fh / 2;
+    const grad = faceCtx.createRadialGradient(cx, cy, 30, cx, cy, fw * 0.55);
+    grad.addColorStop(0, '#c8b8a0');
+    grad.addColorStop(0.6, '#5a4a3a');
+    grad.addColorStop(1, '#000');
+    faceCtx.fillStyle = grad;
+    faceCtx.beginPath();
+    faceCtx.ellipse(cx, cy, fw * 0.38, fh * 0.48, 0, 0, Math.PI * 2);
+    faceCtx.fill();
+    // sunken eyes
+    faceCtx.fillStyle = '#000';
+    faceCtx.beginPath();
+    faceCtx.ellipse(cx - 90, cy - 40, 60, 35, 0, 0, Math.PI * 2);
+    faceCtx.ellipse(cx + 90, cy - 40, 60, 35, 0, 0, Math.PI * 2);
+    faceCtx.fill();
+    // red pupils
+    faceCtx.fillStyle = '#a00';
+    faceCtx.beginPath();
+    faceCtx.arc(cx - 90, cy - 35, 12, 0, Math.PI * 2);
+    faceCtx.arc(cx + 90, cy - 35, 12, 0, Math.PI * 2);
+    faceCtx.fill();
+    // gaping mouth
+    faceCtx.fillStyle = '#100';
+    faceCtx.beginPath();
+    faceCtx.ellipse(cx, cy + 110, 80, 110, 0, 0, Math.PI * 2);
+    faceCtx.fill();
+    // jagged teeth
+    faceCtx.fillStyle = '#d8d0bc';
+    for (let i = -4; i <= 4; i++) {
+      faceCtx.beginPath();
+      faceCtx.moveTo(cx + i * 16, cy + 20);
+      faceCtx.lineTo(cx + i * 16 + 8, cy + 20);
+      faceCtx.lineTo(cx + i * 16 + 4, cy + 60 + (i % 2) * 12);
+      faceCtx.closePath();
+      faceCtx.fill();
+    }
+    // streaks
+    faceCtx.strokeStyle = 'rgba(80,0,0,0.6)';
+    faceCtx.lineWidth = 4;
+    for (let i = 0; i < 6; i++) {
+      faceCtx.beginPath();
+      faceCtx.moveTo(cx - 100 + i * 40, cy - 70);
+      faceCtx.lineTo(cx - 110 + i * 40 + Math.random() * 20, cy + 200);
+      faceCtx.stroke();
+    }
+  }
+  drawFace();
+
+  // ---- audio: mic + scary sounds ----
+  let audioCtx, analyser, dataArr, micStream;
+  let micLevel = 0;
+  let smoothedLevel = 0;
+
+  async function initMic() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+      const src = audioCtx.createMediaStreamSource(micStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.4;
+      src.connect(analyser);
+      dataArr = new Uint8Array(analyser.fftSize);
+      micState.textContent = 'слушаю...';
+      micState.style.color = '#5a5';
+      return true;
+    } catch (e) {
+      micState.textContent = 'нет доступа к микрофону';
+      micState.style.color = '#a44';
+      return false;
+    }
+  }
+
+  function readMic() {
+    if (!analyser) return 0;
+    analyser.getByteTimeDomainData(dataArr);
+    let sum = 0;
+    for (let i = 0; i < dataArr.length; i++) {
+      const v = (dataArr[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / dataArr.length);
+    return Math.min(1, rms * 4);
+  }
+
+  function playTone(freq, dur, type='sine', vol=0.2) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.value = 0;
+    g.gain.linearRampToValueAtTime(vol, audioCtx.currentTime + 0.02);
+    g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + dur);
+    o.connect(g).connect(audioCtx.destination);
+    o.start();
+    o.stop(audioCtx.currentTime + dur);
+  }
+
+  function playScreech() {
+    if (!audioCtx) return;
+    const dur = 0.6;
+    for (let i = 0; i < 4; i++) {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = ['sawtooth','square','triangle','sawtooth'][i];
+      o.frequency.value = 120 + i * 80 + Math.random() * 60;
+      o.frequency.linearRampToValueAtTime(800 + Math.random() * 600, audioCtx.currentTime + dur);
+      g.gain.value = 0;
+      g.gain.linearRampToValueAtTime(0.18, audioCtx.currentTime + 0.05);
+      g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + dur);
+      o.connect(g).connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + dur);
+    }
+  }
+
+  function playWhisper() {
+    if (!audioCtx) return;
+    const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 1.5, audioCtx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) {
+      const env = Math.sin((i / ch.length) * Math.PI);
+      ch[i] = (Math.random() * 2 - 1) * env * 0.15;
+    }
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 800;
+    filter.Q.value = 4;
+    src.connect(filter).connect(audioCtx.destination);
+    src.start();
+  }
+
+  function playHeartbeat() {
+    if (!audioCtx) return;
+    playTone(60, 0.18, 'sine', 0.3);
+    setTimeout(() => playTone(50, 0.22, 'sine', 0.3), 200);
+  }
+
+  // ---- subtitle / whisper lines (original) ----
+  const lines = [
+    '...тише...',
+    'оно слышит дыхание',
+    'кто-то идёт за деревьями',
+    'не двигайся',
+    'оно близко',
+    'не смотри на луну',
+    'оно знает, что ты тут',
+    'звук был ошибкой',
+    '...молчи...',
+    'оно не моргает',
+  ];
+  function showSubtitle(text, ms = 3000) {
+    subtitleEl.textContent = text;
+    clearTimeout(showSubtitle._t);
+    showSubtitle._t = setTimeout(() => subtitleEl.textContent = '', ms);
+  }
+
+  // ---- game state ----
+  const TOTAL_SECONDS = 15 * 60;
+  let timeLeft = TOTAL_SECONDS;
+  let running = false;
+  let scareCooldown = 0;
+  let lastTick = performance.now();
+  let lastEvent = 0;
+  const NOISE_THRESHOLD = 0.18;
+  const PANIC_THRESHOLD = 0.45;
+
+  function fmtTime(s) {
+    const m = Math.floor(s / 60);
+    const r = Math.floor(s % 60);
+    return `${m.toString().padStart(2,'0')}:${r.toString().padStart(2,'0')}`;
+  }
+
+  function triggerJumpscare(reasonText) {
+    jumpEl.classList.add('show');
+    playScreech();
+    setTimeout(() => {
+      jumpEl.classList.remove('show');
+      loseReason.textContent = reasonText;
+      loseScreen.style.display = 'flex';
+      running = false;
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+    }, 900);
+  }
+
+  function win() {
+    running = false;
+    winScreen.style.display = 'flex';
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+  }
+
+  function update(dt, now) {
+    micLevel = readMic();
+    smoothedLevel = smoothedLevel * 0.7 + micLevel * 0.3;
+    micBar.style.width = (smoothedLevel * 100) + '%';
+
+    if (micLevel > NOISE_THRESHOLD) {
+      presenceDistance -= dt * (0.02 + (micLevel - NOISE_THRESHOLD) * 0.8);
+      camSway += dt * 4;
+    } else {
+      presenceDistance += dt * 0.006;
+      camSway *= 0.95;
+    }
+    presenceDistance = Math.max(0, Math.min(1, presenceDistance));
+
+    if (micLevel > PANIC_THRESHOLD) {
+      timerEl.classList.add('danger');
+      threatEl.textContent = 'оно идёт сюда!';
+      threatEl.style.color = '#f55';
+    } else if (presenceDistance < 0.4) {
+      timerEl.classList.remove('danger');
+      threatEl.textContent = 'оно близко...';
+      threatEl.style.color = '#c93';
+    } else if (presenceDistance < 0.7) {
+      timerEl.classList.remove('danger');
+      threatEl.textContent = 'оно где-то рядом';
+      threatEl.style.color = '#a96';
+    } else {
+      timerEl.classList.remove('danger');
+      threatEl.textContent = 'тишина...';
+      threatEl.style.color = '#6a6';
+    }
+
+    if (presenceDistance <= 0.02) {
+      triggerJumpscare('оно услышало тебя.');
+      return;
+    }
+
+    // random ambient events
+    if (now - lastEvent > 8000 + Math.random() * 12000) {
+      lastEvent = now;
+      const r = Math.random();
+      if (r < 0.4) {
+        showSubtitle(lines[Math.floor(Math.random() * lines.length)]);
+        playWhisper();
+      } else if (r < 0.7) {
+        playHeartbeat();
+        showSubtitle('что-то двигается...');
+      } else {
+        playTone(80 + Math.random() * 40, 0.4, 'triangle', 0.15);
+        showSubtitle('ветка хрустнула');
+        presenceDistance -= 0.05;
+      }
+    }
+
+    camX += Math.sin(now * 0.0003) * dt * 0.005 + camSway * 0.0008;
+
+    timeLeft -= dt;
+    timerEl.textContent = fmtTime(Math.max(0, timeLeft));
+    if (timeLeft <= 0) { win(); return; }
+  }
+
+  function loop(now) {
+    const dt = Math.min(0.1, (now - lastTick) / 1000);
+    lastTick = now;
+    if (running) update(dt, now);
+    drawForest(now);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    startBtn.textContent = 'подключаю микрофон...';
+    const ok = await initMic();
+    if (!ok) {
+      startBtn.disabled = false;
+      startBtn.textContent = 'попробовать снова';
+      return;
+    }
+    menu.style.display = 'none';
+    running = true;
+    lastTick = performance.now();
+    lastEvent = performance.now();
+    showSubtitle('ты слышишь только своё дыхание...', 4000);
+  });
+
+  // dev shortcut: press W to skip to win, L to lose (for testing in tmp)
+  window.addEventListener('keydown', (e) => {
+    if (!running) return;
+    if (e.key === 'w' && e.ctrlKey) win();
+    if (e.key === 'l' && e.ctrlKey) triggerJumpscare('тест');
+  });
+})();
+</script>
+</body>
+</html>
