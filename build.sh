@@ -24,7 +24,9 @@ fi
 
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+# CMAKE_POLICY_VERSION_MINIMUM=3.5 is needed because raylib 5.0's CMakeLists.txt
+# uses an old cmake_minimum_required value that newer CMake (>=4) rejects.
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
 cmake --build . -j
 
 echo
