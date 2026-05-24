@@ -18,6 +18,18 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
+// miniaudio on Windows pulls in <windows.h>, which defines several names
+// that collide with raylib's API. Strip them so raylib's versions win.
+#ifdef _WIN32
+    #undef CloseWindow
+    #undef ShowCursor
+    #undef LoadImage
+    #undef DrawText
+    #undef DrawTextEx
+    #undef PlaySound
+    #undef Rectangle
+#endif
+
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
